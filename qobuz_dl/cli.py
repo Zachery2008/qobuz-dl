@@ -1,5 +1,4 @@
 import configparser
-import hashlib
 import logging
 import glob
 import os
@@ -30,8 +29,6 @@ def _reset_config(config_file):
     logging.info(f"{YELLOW}Creating config file: {config_file}")
     config = configparser.ConfigParser()
     config["DEFAULT"]["email"] = input("Enter your email:\n- ")
-    password = input("Enter your password\n- ")
-    config["DEFAULT"]["password"] = hashlib.md5(password.encode("utf-8")).hexdigest()
     config["DEFAULT"]["default_folder"] = (
         input("Folder for downloads (leave empty for default 'Qobuz Downloads')\n- ")
         or "Qobuz Downloads"
@@ -54,11 +51,59 @@ def _reset_config(config_file):
     config["DEFAULT"]["no_database"] = "false"
     logging.info(f"{YELLOW}Getting tokens. Please wait...")
     bundle = Bundle()
-    config["DEFAULT"]["app_id"] = str(bundle.get_app_id())
-    config["DEFAULT"]["secrets"] = ",".join(bundle.get_secrets().values())
+    app_id = str(bundle.get_app_id())
+    secrets = list(bundle.get_secrets().values())
+    config["DEFAULT"]["app_id"] = app_id
+    config["DEFAULT"]["secrets"] = ",".join(secrets)
     config["DEFAULT"]["folder_format"] = DEFAULT_FOLDER
     config["DEFAULT"]["track_format"] = DEFAULT_TRACK
     config["DEFAULT"]["smart_discography"] = "false"
+
+    # Try POST login with email/password to get a token
+    import requests
+    email = config["DEFAULT"]["email"]
+    password = input("Enter your Qobuz password:\n- ")
+    token = None
+
+    try:
+        s = requests.Session()
+        s.headers.update({
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:83.0) "
+                          "Gecko/20100101 Firefox/83.0",
+            "X-App-Id": app_id,
+        })
+        resp = s.post(
+            "https://www.qobuz.com/api.json/0.2/user/login",
+            data={"email": email, "password": password},
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            token = data.get("user_auth_token")
+            if token:
+                logging.info(f"{GREEN}Login successful!")
+            else:
+                logging.warning(f"{YELLOW}Login response had no token.")
+        else:
+            logging.warning(
+                f"{YELLOW}Login returned {resp.status_code}. "
+                "Falling back to manual token entry."
+            )
+    except Exception as e:
+        logging.warning(f"{YELLOW}Login failed: {e}")
+
+    if not token:
+        logging.info(
+            f"{YELLOW}To get a token manually:\n"
+            "  1. Open https://play.qobuz.com and log in\n"
+            "  2. Open DevTools (F12) → Network tab\n"
+            "  3. Look for API requests with user_auth_token in the response\n"
+            '  4. Copy the "user_auth_token" value'
+        )
+        token = input("Paste your user_auth_token:\n- ").strip()
+
+    config["DEFAULT"]["password"] = token
+
     with open(config_file, "w") as configfile:
         config.write(configfile)
     logging.info(
